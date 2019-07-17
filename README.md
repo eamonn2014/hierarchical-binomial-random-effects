@@ -1,0 +1,3 @@
+# hierarchical-binomial-random-effects
+Simulation of binomial response and hierarchical levels
+in progress.....

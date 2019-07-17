@@ -112,36 +112,6 @@ header-includes:
 cat("\nI simulate between country and between site SD with an underlying mean (see reference where code was helpful).\n")
 
 ```
-## Contents
-
-```{r}
-
- cat("* Directories
- * Population parameters  & Design Paramters for simulation
- * Examine simulation datan
- * Create unbalanced data. Trial and error to program this!
- * Frequentist random effects model
- * Use approach in reference , although I think it can only handle one cluster
- * Use sandwich approach in reference , although I think it can only handle one cluster
- * Analysis ignoring clustering
- * Bayesian
- * Load Bayesian analysis
- * Check Model
- * Predictions
- * Plot Bayesian site level predictions
- * Plot Bayesian country level predictions
- * Exploring
- * Plot country SD estimates
- * Plot site SD estimates
- * Crude estimates
- * Plot crude estimates country level
- * Plot crude site estimates
- * lmer estimates sites
- * lmer estimates countries
- * References
- * Computing environment")
-
-```
 
 ## Population parameters  & Design Paramters for simulation
 

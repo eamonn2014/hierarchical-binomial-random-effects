@@ -1,0 +1,956 @@
+---
+title: "Simulate a binomial response and random effects"
+author: "Eamonn O'Brien"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+  fig_height: 6
+  fig_width: 8
+header-includes:
+- \usepackage{eso-pic,graphicx,transparent}
+- \usepackage{graphicx}
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \setlength\headheight{22pt}
+- \fancyfoot[RO]{Simulation}
+- \usepackage{lastpage}
+- \cfoot{Page \thepage\ of \pageref{LastPage}}
+---
+
+\newpage  
+\tableofcontents  
+\listoffigures
+\listoftables
+\newpage
+
+```{r set-options, echo=FALSE, cache=FALSE, warning = FALSE}
+
+         set.seed(123)
+         startTime<-proc.time()
+         library(knitr)
+         options(width=60)
+
+         opts_chunk$set(comment = "", warning = FALSE, message = FALSE,
+                       echo = TRUE, tidy = TRUE, size="tiny",  cache=TRUE,
+                       progress=TRUE, tidy.opts=list(width.cutoff=60),
+                         fig.width=7, fig.height=3.5,
+                       cache.path = 'program_Cache/',
+                       fig.path='figure/')
+         
+        # opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE) 
+         
+        knitr::knit_hooks$set(inline = function(x) {
+          knitr:::format_sci(x, 'md')
+        })
+         
+        
+        options(scipen=999)  # remove scientific notation
+        
+
+         # create an R file of the code!
+        # https://stackoverflow.com/questions/26048722/knitr-and-tangle-code-without-execution
+        
+         # knit_hooks$set(purl = function(before, options) {
+         #   if (before) return()
+         #   input  = current_input()  # filename of input document
+         #   output = paste(tools::file_path_sans_ext(input), 'R', sep = '.')
+         #   if (knitr:::isFALSE(knitr:::.knitEnv$tangle.start)) {
+         #   assign('tangle.start', TRUE, knitr:::.knitEnv)
+         #   unlink(output)
+         # }
+         #   cat(options$code, file = output, sep = '\n', append = TRUE)
+         # })
+
+   
+     #   list.of.packages <- c("tidyverse")  # haven causes a problem
+        
+     #   new.packages <- list.of.packages[!(list.of.packages %in% 
+     #   installed.packages()[,"Package"])]
+     #   if(length(new.packages)) install.packages(new.packages)
+     #   sapply(X = list.of.packages, require, character.only = TRUE)
+         
+         
+ 
+```
+
+## Some functions
+
+```{r ,echo=FALSE}
+
+
+
+      wd <- getwd()
+      wd.code <- wd #paste0(Rhome,'CODE DEVELOPMENT')                  # note this new dir
+      wd.data <- wd # paste0(Rhome,'DATA')
+ 
+    # rounding functions
+      p2 <- function(x) {formatC(x, format="f", digits=2)}
+      p3 <- function(x) {formatC(x, format="f", digits=3)}
+      p4 <- function(x) {formatC(x, format="f", digits=4)}
+      
+       # function to calculate the mode     
+      getmode <- function(v) {
+           uniqv <- unique(v)
+           uniqv[which.max(tabulate(match(v, uniqv)))]
+          }
+ 
+       
+        #perhaps help colour plot text based on loop count
+      is.even <- function(x){ x %% 2 == 0 }
+           
+      options(width=90)
+
+
+```
+
+## Introduction
+
+```{r} 
+
+cat("\nI simulate between country and between site SD with an underlying mean (see reference where code was helpful).\n")
+
+```
+## Contents
+
+```{r}
+
+ cat("* Directories
+ * Population parameters  & Design Paramters for simulation
+ * Examine simulation datan
+ * Create unbalanced data. Trial and error to program this!
+ * Frequentist random effects model
+ * Use approach in reference , although I think it can only handle one cluster
+ * Use sandwich approach in reference , although I think it can only handle one cluster
+ * Analysis ignoring clustering
+ * Bayesian
+ * Load Bayesian analysis
+ * Check Model
+ * Predictions
+ * Plot Bayesian site level predictions
+ * Plot Bayesian country level predictions
+ * Exploring
+ * Plot country SD estimates
+ * Plot site SD estimates
+ * Crude estimates
+ * Plot crude estimates country level
+ * Plot crude site estimates
+ * lmer estimates sites
+ * lmer estimates countries
+ * References
+ * Computing environment")
+
+```
+
+## Population parameters  & Design Paramters for simulation
+
+```{r, echo=TRUE}
+   
+
+# mu: underlying mean of the outcome in the control group
+# beta1: covariate not used
+# sdcountry: sd of random effect at the country level (sd for the bi)
+# sdsite: sd of random effect at the site level (sd for the bij)
+
+# Design parameters
+# countries: number of countries
+# sites: number of sites per country
+# persons : number of persons per site
+     
+    mu = 0.8   # 0.5 means odds = 1, so intercept should be zero (log odds)
+    (reg.intercept <- log(mu/(1-mu)))  #   the intercept of the regression model should approximate this (odds)
+    # get back to prob
+    exp( reg.intercept)/(1+ exp(reg.intercept))  # convert log odds to prob
+    
+
+    beta1=1    # if this was 1, means no difference, log(1)==0 * trt 
+
+    sdcountry= 0.2 # this is on the log odds scale
+    sdsite = 0.4   # this is on the log odds scale
+
+    # Design Parameters
+    countries = 25   # no of countries
+    
+    # no of sites in countries
+    sites <- MASS::rnegbin(countries, mu = 10, theta = 1.6)
+    sites <- ifelse(sites==0, 1 , sites) # dont want 0s
+    
+    # no persons at each site
+    persons <- MASS::rnegbin(sum(sites), mu = 11, theta = 2) + 1 # dont want any 0s hence the + 1
+  
+```
+
+## Examine simulation data
+
+```{r, echo=TRUE}
+    
+    sum(persons) 
+    sites                        # shows the number of sites in each of the countries
+    sequence(sites)              # expand the sites
+    persons                      # shows the persons at each site
+    rep(1:length(sites), sites)  # grouping indicator for sites
+    
+  
+```
+
+## Create unbalanced data. Trial and error to program this!
+
+```{r, echo=TRUE}
+
+    # pp <- seq_along(rep(persons, persons))# count of persons (not really needed)
+    pp <- rep(1:sum(persons))               # count of persons (not really needed) but simpler
+    g <- rep(1:length(persons), persons)    # person in each site is 'flattened' 
+    x <- rep(1:length(sites), sites)        # sites ditto
+    country <- rep(x, persons)              # countries
+    
+    # put tx in there for now although it does not vary
+    tx=1
+    d <- cbind( country=country, site=g, person=pp , tx=tx)  # create a data frame
+    summary(d)
+    
+    #draw random effects for clusters
+    countryRE <- rnorm(countries,0,sdcountry)
+    siteRE <- rnorm( sum(sites),0,sdsite)
+    
+
+    #create outcome
+    (prob <- 1/(1 + exp(-( log(mu/(1-mu)) + log(beta1)*tx + countryRE[d[,1]] + siteRE[d[,2]] ))))
+    (y <- rbinom(sum(persons), 1, prob))
+
+
+    # create 
+    d <- as.data.frame(cbind(y,d))
+    d$country <- as.factor(d$country)
+    d$site <- as.factor(d$site)
+
+  
+```
+
+## Frequentist random effects model
+
+```{r, echo=TRUE}
+
+    require(lme4)
+    fit0 = glmer(
+      data = d,
+        formula = y ~ (1|country/site),
+      family= binomial
+    )
+    print(fit0)
+
+   # (fit0fci <- confint(fit0))  # takes some time
+    
+    coef(fit0)
+  
+    # are these sensible from binomial?
+    plot(fit0)
+    qqnorm(residuals(fit0))
+    hist(residuals(fit0))
+
+    fit0r <- ranef(fit0, condVar = TRUE)   # frequentist estimates of random effects
+
+    coef(fit0)
+    ranef(fit0, condVar = TRUE)  
+
+
+    predFun <- function(fit0) {
+        predict(fit0)
+    }
+    bb <- bootMer(fit0,nsim=200,FUN=predFun,seed=101)
+    
+    # https://stats.stackexchange.com/questions/147836/prediction-interval-for-lmer-mixed-effects-model-in-r
+    c(attr(ranef(fit0,condVar=TRUE)[[1]],"postVar"))  # site variances 
+    c(attr(ranef(fit0,condVar=TRUE)[[2]],"postVar"))  # country variances 
+
+```
+
+## Use sandwich approach in reference , although I think it can only handle one cluster
+
+```{r, echo=TRUE}    
+
+    require(rms)
+    dd <- datadist(d)   #  Run for all potential vars.
+    options(datadist="dd") 
+    
+    d$tx <- rnorm(sum(persons), 0, 1) # need to do this otherwise intercept model has no covar matrix
+    o <- try(lrm(y~1 + tx,x=TRUE,y=TRUE, d))
+    (v <- robcov(fit=o,cluster=d[,c(2)]))   # can I cluster on multiple variances - no?
+
+    summary(v)
+    
+```
+
+## Analysis ignoring clustering
+
+```{r, echo=TRUE}  
+
+    binom::binom.confint(sum(d$y==1), length(d$y))
+
+```
+
+## Bayesian
+
+```{r, echo=TRUE, eval=TRUE}
+
+    require(brms)
+    require(rstan)
+
+    rstan_options(auto_write = TRUE)
+   # options(mc.cores = parallel::detectCores())
+
+    fit = brm(
+        formula = y ~ (1|country/site),
+      family= bernoulli, data = d, seed=123,
+    )
+    print(fit)
+    
+    f <- fit # selected model, default priors used
+
+    # save the workspace
+ #  save.image(file=  "brms bernouli model.RData" )
+   
+  
+```
+
+## Load Bayesian analysis
+
+```{r , eval=TRUE}
+
+  # load(file="brms bernouli model.RData" )  #site sd=2.5, country=0.5
+    # library(brms)
+
+```
+
+## Check Model
+
+```{r, echo=TRUE ,eval=TRUE} 
+
+
+  
+  print(f)
+
+  pp_check(f)  # shows dens_overlay plot by default
+  pp_check(f, type = "error_hist", nsamples = 11)    # 11 draws
+  pp_check(f, type = "scatter_avg", nsamples = 100)  # mean on x axis y observed
+  #pp_check(f, type = "stat_2d")  ## took a long time so cancelled this
+  #pp_check(f ,x="vas", type = "intervals") ## took a long time so cancelled this
+  pp_check(f, type = "scatter", nsamples=2)
+  
+ # pp_check(f,x="avisit",type = "error_scatter_avg_vs_x", nsamples = 10)  #throwing error
+ # pp_check(f,x="vas", type = "ribbon", nsamples = 20) #throwing error
+  pp_check(f ,type = "error_scatter", nsamples = 6)
+
+  stanplot(f, type = "hist")
+ 
+```
+
+## Predictions
+
+```{r, echo=TRUE ,eval=TRUE} 
+
+
+  print(f)
+
+  f1 <- fitted(f,  re_formula=NULL)   # include all random effects
+  head(f1)     #site level
+  f2 <- fitted(f,  re_formula=NA)     # no random effects
+  head(f2)     # intercept only
+  
+  f3 <- predict(f, re_formula=NULL)   # include all random effects
+  head(f3)     #individual
+  f4 <- predict(f, re_formula=NA)     # no random effects
+  head(f4)     #indivdual
+  
+  f5 <- predict(f, re_formula = ~ (1|country))
+  head(f5)     #not sure
+  f6 <- predict(f, re_formula = ~ (1|site))
+  head(f6) # individual level
+  
+  f8 <- fitted(f, re_formula = ~ (1|country))
+  head(f8)    #country level
+  f9 <- fitted(f, re_formula = ~ (1|country/site))
+  head(f9)    #site level only same as f1
+  
+ 
+```
+
+## Plot Bayesian site level predictions
+
+```{r, echo=TRUE ,eval=TRUE, fig.width=7, fig.height=12} 
+
+
+    pred <- f1 # f9
+    df <- data.frame(cbind(pred, d))
+    df$label <- df$site
+
+ # start here use coefficients from model rather than predictions
+    A <- function(x) 1/(1+exp(-x))
+ 
+    e1 <- A(fixef(fit)[,'Estimate'])
+    e2 <- A(fixef(fit)[,'Q2.5'])
+    e3 <- A(fixef(fit)[,'Q97.5'])
+
+    bc <- coef(fit, old=FALSE, summary=TRUE)$`country:site`
+    df <- as.data.frame(bc)
+    names(df) <- dimnames(bc)[[2]]
+    df$sites <-     gsub(".*_", "", rownames(df))
+    df$countries <- gsub("_.*", "", rownames(df))
+ 
+    df <- data.frame(df[,c(2,5,6)], apply(df[,c(1,3,4)],2, A) )
+ 
+    df <- df[,c(3,2,4,1,5,6)]
+
+    df$label <- df$sites
+    df$label <- as.numeric(as.character(df$label))
+    df <- df[order(df$label),]
+    # reverses the factor level ordering for labels after coord_flip()
+   # df <- df[order(sites),]
+    df$label <- factor(df$label, levels=rev(unique(df$label)), ordered = T)
+     
+    # df$label <- factor(   df$label, levels=unique(as.character(   df$label)) )
+
+    fp <- NULL
+    fp <- ggplot(data=df, aes(x=label, y=Estimate, ymin=Q2.5, ymax=Q97.5, colour=label)) +
+      geom_pointrange() +
+         geom_hline(yintercept=mu, color="green",lty=2) +  # add a dotted line 
+      
+      geom_hline(yintercept=e1,  color="blue", linetype="dashed") +  # estimate
+      geom_hline(yintercept=e2,   color="blue", linetype="dashed") +   
+      geom_hline(yintercept=e3,    color="blue", linetype="dashed") +   
+      coord_flip() +  # flip coordinates (puts labels on y axis)
+      xlab("Label") + ylab("Mean (95% CI)") +
+      theme_bw() + # use a white background
+      theme(legend.position="none") +
+     ggtitle("Site level predictions") 
+    print(fp)
+    
+```
+
+## Plot Bayesian country level predictions
+
+```{r, echo=TRUE ,eval=TRUE} 
+    
+    #these are predictions 
+    pred <- f8
+    df <- data.frame(cbind(pred, d))
+    df$label <- df$country
+
+    # start here use coefficients from model rather than predictions
+    bc <- coef(fit, old=FALSE, summary=TRUE)$country
+    df <- as.data.frame(bc)
+    names(df) <- dimnames(bc)[[2]]
+    df$label <- unique(d$country)
+  
+
+    df <- data.frame(df[,c(2,5)], apply(df[,c(1,3,4)],2, A) )
+    df <- df[,c(2,3,1,4,5)]
+
+    # reverses the factor level ordering for labels after coord_flip()
+    df$label <- factor(df$label, levels=rev(unique(df$label)), ordered = T)
+    
+    fp <- NULL
+    fp <- ggplot(data=df, aes(x=label, y=Estimate, 
+                              ymin=df[,4], ymax=df[,5], colour=label)) +
+      geom_pointrange() +
+      geom_hline(yintercept=mu, color="green",lty=2) +  # add a dotted line 
+      
+      geom_hline(yintercept=e1, color="blue", linetype="dashed") +  # estimate
+      geom_hline(yintercept=e2,    color="blue", linetype="dashed") +   
+      geom_hline(yintercept=e3,    color="blue", linetype="dashed") +   
+  
+      coord_flip() +  # flip coordinates (puts labels on y axis)
+      xlab("Country") + 
+      ylab("Mean (95% CI)") +
+      theme_bw() + # use a white background
+      theme(legend.position="none") +
+      ggtitle("Country level predictions") 
+    print(fp)
+
+
+  # fitted_values <- fitted(fit)
+  # head(fitted_values)
+  # plot fitted means against actual response
+  # dat <- as.data.frame(cbind(Y = standata(fit)$Y, fitted_values))
+  # ggplot(dat) + geom_point(aes(x = Estimate, y = Y))
+  
+```
+
+## Exploring
+
+```{r, echo=TRUE ,eval=TRUE}  
+  
+  newdata <- data.frame(country = 1, site=1, person=1)
+  predict(fit, newdata = newdata)
+  
+  f7 <- predict(f, re_formula=NULL, summary=F)   # include all random effects
+  f7[1:10,1:10] #columns are samples, rows predictions
+
+  x <- pp_check(f , nsamples=1)
+  head(x$data)
+
+  data1 <- make_standata(formula = y ~ (1|country/site),
+      family= bernoulli, data = d,)
+
+  data1$Y
+ 
+  ##########################################################################
+
+  samples1 <- posterior_samples(fit, "^b")
+  head(samples1)
+  
+  # extract posterior samples of group-level standard deviations
+  samples2 <- posterior_samples(fit, "^sd_")
+  head(samples2)
+
+  samples3 <- posterior_samples(fit, "^r_country")
+  head(samples3)[,1:10]  # show forst 10 columns
+
+```
+
+## Plot country SD estimates
+
+
+```{r, echo=TRUE ,eval=TRUE} 
+    
+   # posterior samples
+   mc.1 <- as.mcmc(f, pars = NA, exact_match = TRUE,
+                   combine_chains = TRUE, inc_warmup = FALSE)   
+
+   # get specific estimates 
+   # names(mc.1[1,])
+   mc_country <- mc.1[, grep("r_country[", names(mc.1[1,]), fixed=TRUE) ]
+   # names(mc_country[1,])
+
+   # convert to probabilities
+   prob <- apply(mc_country,c(2),function(x) exp(x)/(1+exp(x))) 
+   # function to calculate summary stats
+   statz <- function(x) {
+                   t(cbind(c(mean(x), quantile(x, c(0.025,0.975))) ))
+           }
+
+   #here are the country specific estimates  
+   est <- apply(prob,2,statz)
+ 
+  # forest plot see refernce
+  label <- paste0("country", 1:25)
+  mean  <-  est[1,]
+  lower <-  est[2,]
+  upper <-  est[3,]
+  
+  df <- data.frame(label, mean, lower, upper)
+  
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+
+  library(ggplot2)
+
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=sdcountry, lty=2) +  # add a dotted line at x=1 after flip
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw()  # use a white background
+  print(fp)
+
+
+```
+
+## Plot site SD estimates
+
+```{r, echo=TRUE ,eval=TRUE, fig.width=7, fig.height=12} 
+    
+   # posterior samples
+   mc.1 <- as.mcmc(f, pars = NA, exact_match = TRUE,
+                   combine_chains = TRUE, inc_warmup = FALSE)   
+
+   # get specific estimates 
+   # names(mc.1[1,])
+   mc_country <- mc.1[, grep("r_country:", names(mc.1[1,]), fixed=TRUE) ]
+   #names(mc_country[1,])
+
+   # convert to probabilities
+   prob <- apply(mc_country, c(2) ,function(x) exp(x)/(1+exp(x))) 
+
+   # function to calculate summary stats
+   statz <- function(x) {
+                   t(cbind(c(mean(x), quantile(x, c(0.025,0.975))) ))
+           }
+
+   #here are the specific estimates  
+   est <- apply(prob,2,statz)
+ 
+  # forest plot see reference
+  # label <- paste0("site", 1:dim(mc_country)[2])
+
+  #get labbeling info
+
+  x1 <- gsub("[^0-9\\_]", "",  names(mc_country[1,]))
+  x2 <- gsub("\\_", "",  x1)
+
+  x2a <- gsub("\\_", ".",  x1)
+  co <- gsub(".*\\.(.*)\\..*", "\\1", x2a)
+
+  site.only <- sub('.*\\.', '', x2a)
+  label <-  as.numeric(site.only)
+  mean  <-  est[1,]
+  lower <-  est[2,]
+  upper <-  est[3,]
+
+
+  df <- data.frame(co, label, mean, lower, upper)
+  df <- df[order(label),]
+
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper, colour=co)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=sdsite, lty=2) +  # add a dotted line at x=1 after flip
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw() + # use a white background +
+    theme(legend.position="none") 
+
+  print(fp)
+
+
+```
+
+## Comparing frequentist and Bayesian, what the difference between fitted and coef from model output?
+
+```{r, eval=FALSE}
+
+# fixef(fit, old=FALSE)
+# object$fit@sim
+# country predictions https://github.com/paul-buerkner/brms/issues/82
+
+    #########################################
+    f8 <- fitted(f, re_formula = ~ (1|country))   # is this the correct way for country level?
+    ba <- unique(f8)[,1]    			                # Bayesian predictions
+    ba[1:10]
+
+    
+    fr <- as.vector(unlist(1/(1+exp(-coef(fit0)$country))))  # freq blups
+    plot(fr, ba); abline(0,1)				 # compare Bayesian and Frequentist
+    
+    #########################################
+    # above differs to model coefficients?
+    bc <- as.vector(coef(fit, old=TRUE)$country)
+    bc <- 1/(1+exp(-bc))
+    bc
+    
+    plot(fr, bc); abline(0,1)     # compare Bayesian and Frequentist
+    
+    #########################################
+    f <-as.vector(unlist(coef(fit0)$country))  #frequentist
+    b <- as.vector(coef(fit)$country[,1,])     #bayes
+    plot(f, b); abline(0,1) 
+    cor(f,b)
+
+    
+    f <- as.vector(unlist(coef(fit0)$site))  #frequentist
+    # b <- as.vector(coef(fit)$`country:site`[,1,])     
+    # bayes , needs ordering
+    bc <- coef(fit, old=FALSE, summary=TRUE)$`country:site`
+    df <- as.data.frame(bc)
+    names(df) <- dimnames(bc)[[2]]
+    df$sites <-     gsub(".*_", "", rownames(df))
+    #df$countries <- gsub("_.*", "", rownames(df))
+    df$sites <- as.numeric(as.character(df$sites))
+    df <- df[order(df$sites),]
+    b <- df[,1]
+    plot(f, b); abline(0,1) 
+    cor(f,b)
+
+```
+
+## Crude estimates
+
+```{r, eval=TRUE}
+
+foo <- d
+ 
+library(dplyr)
+foox <- foo %>% group_by(  country , site ) %>% summarise(N=length(y), ones=(mean(y))*length(y),
+                                                          zero=(1-mean(y))*length(y),
+                                                          mean=mean(y) ,                                                 )
+
+foox <- data.frame(foox)
+names(foox) <- c("Country","site","N","Yes","No","Mean")  
+
+foox <- cbind(foox,binconf(foox$Yes, foox$N))
+foox
+
+
+foox1 <- foo %>% group_by(  country   ) %>% summarise(N=length(y), ones=(mean(y))*length(y),
+                                                          zero=(1-mean(y))*length(y),
+                                                          mean=mean(y) ,                                                 )
+
+foox1 <- data.frame(foox1)
+names(foox1) <- c("Country","N","Yes","No","Mean")  
+
+
+```
+
+## Plot crude estimates country level
+
+```{r, eval=TRUE}
+
+
+  foox1 <- cbind(foox1,binconf(foox1$Yes, foox1$N))
+  est <- foox1
+
+  label <- paste0("country", 1:25)
+  mean  <-  est[,6]
+  lower <-  est[,7]
+  upper <-  est[,8]
+  
+  df <- data.frame(label, mean, lower, upper)
+  
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+
+  library(ggplot2)
+
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper, colour=label)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=mu, lty=2) +  # add a dotted line at x=1 after flip
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw() +   # use a white background
+          theme(legend.position="none") 
+  print(fp)
+
+
+```
+
+## Plot crude site estimates
+
+```{r, echo=TRUE ,eval=TRUE, fig.width=7, fig.height=12} 
+
+  est <- foox
+  label <-  est$site
+  mean  <-  est[,6]
+  lower <-  est[,8]
+  upper <-  est[,9]
+
+
+  df <- data.frame(co=foox$Country, label, mean, lower, upper)
+  #df <- df[order(label),]
+
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper, colour=co)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=mu, lty=2) +  # add a dotted line at x=1 after flip
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw() + # use a white background +
+    theme(legend.position="none") 
+
+  print(fp)
+
+# cat("\n")
+# #cat("Summary Statistics")
+# cat("\n")
+# print(kable(foox, format="pandoc", digits=c(0,0,0,4),
+#             caption = "crude estimates"))
+# cat("\n")
+
+```
+
+## lmer estimates sites
+
+```{r, eval=TRUE, fig.width=7, fig.height=12} 
+
+  # manage the data
+  # fco <- coef(fit0)$`site:country`
+  # c(attr(ranef(fit0,condVar=TRUE)[[1]],"postVar"))  # co
+  str(rr1 <- ranef(fit0, condVar = TRUE))
+  # dotplot(rr1)                    ## default  # 
+  # cV <- ranef(fit0, condVar = TRUE)   
+  # # ranvar <- attr(cV[[1]], "postVar")
+  # # sqrt(diag(ranvar[,,]))
+
+  # get random effects from lmer and calculate confidence intervals too
+  # http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#lme4
+  # intercept
+  fix <- fixef(fit0)              # intercept on log scale
+  fix.var <- sqrt(diag(vcov(fit0)))   # intercept associated standard error^2
+  # blups
+  s.c <- rr1[1][1]                # site country random effects
+  s.c.var <- c(attr(ranef(fit0,condVar=TRUE)[[1]],"postVar"))^0.5  # site country sds
+  # make a datset
+  vars <- as.data.frame(cbind(intercept=fix, intercept.var=fix.var , 
+                              blup=as.vector(unlist(s.c)), blup.var=s.c.var ))
+  # calculate CI for the random effects
+  vars$est <- vars$intercept+vars$blup  # shift from intercept
+  vars$lower <- vars$est+c(-1)* qnorm(0.975)*sqrt(vars$blup.var^2+vars$intercept.var^2)  #lower CI
+  vars$upper <- vars$est+c( 1)* qnorm(0.975)*sqrt(vars$blup.var^2+vars$intercept.var^2)  #upper CI
+
+  #log odds to probabilities
+  A <- function(x) 1/(1+exp(-x))
+  df <- vars
+  df <- data.frame(df[,c(1:4)], apply(df[,c(5:7)],2, A) )
+ 
+
+  label = rownames(s.c$`site:country`)
+  df$sites <-     gsub(":.*","", label)
+  df$countries <- gsub(".*:","", label)
+
+  #plot
+  est <- df
+  label <-  est$sites
+  mean  <-  est$est
+  lower <-  est$lower
+  upper <-  est$upper
+
+  # intercept CI
+  fit0fci <- confint(fit0)
+  L <- fit0fci["(Intercept)",][1][[1]]
+  U <- fit0fci["(Intercept)",][2][[1]]
+
+  df <- data.frame(co=df$countries, label, mean, lower, upper)
+  #df <- df[order(label),]
+
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper, colour=co)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=mu, lty=2) +  # add a dotted line at x=1 after flip
+          geom_hline(yintercept= A(fix),  color="blue", linetype="dashed") +  # estimate
+          geom_hline(yintercept=A(L),  color="blue", linetype="dashed") +   
+          geom_hline(yintercept=A(U),  color="blue", linetype="dashed") +   
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw() + # use a white background +
+    theme(legend.position="none") 
+
+  print(fp)
+
+```
+
+## lmer estimates countries
+
+```{r, eval=TRUE } 
+
+ str(rr1 <- ranef(fit0, condVar = TRUE))
+   
+
+  # get random effects from lmer and calculate confidence intervals too
+  # http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#lme4  
+  # blups
+  s.c <- rr1[2][1]                # country random effects
+  s.c.var <- c(attr(ranef(fit0,condVar=TRUE)[[2]],"postVar"))^0.5  # country sds
+  # make a datset
+  vars <- as.data.frame(cbind(intercept=fix, intercept.var=fix.var , 
+                              blup=as.vector(unlist(s.c)), blup.var=s.c.var ))
+  # calculate CI for the random effects
+  vars$est <- vars$intercept+vars$blup  # shift from intercept
+  vars$lower <- vars$est+c(-1)* qnorm(0.975)*sqrt(vars$blup.var^2+vars$intercept.var^2)  #lower CI
+  vars$upper <- vars$est+c( 1)* qnorm(0.975)*sqrt(vars$blup.var^2+vars$intercept.var^2)  #upper CI
+
+  #log odds to probabilities
+  A <- function(x) 1/(1+exp(-x))
+  df <- vars
+  df <- data.frame(df[,c(1:4)], apply(df[,c(5:7)],2, A) )
+ 
+
+  label = rownames(s.c$`country`)
+  df$countries <- gsub(".*:","", label)
+
+  #plot
+  est <- df
+  label <-  est$countries
+  mean  <-  est$est
+  lower <-  est$lower
+  upper <-  est$upper
+
+  # intercept CI
+# fit0fci <- confint(fit0)
+#  L <- fit0fci["(Intercept)",][1][[1]]
+#  U <- fit0fci["(Intercept)",][2][[1]]
+
+  df <- data.frame( label, mean, lower, upper)
+  #df <- df[order(label),]
+
+  # reverses the factor level ordering for labels after coord_flip()
+  df$label <- factor(df$label, levels=rev(df$label))
+  
+  fp <- NULL
+  fp <- ggplot(data=df, aes(x=label, y=mean, ymin=lower, ymax=upper, colour=label)) +
+          geom_pointrange() + 
+          geom_hline(yintercept=mu, lty=2) +  # add a dotted line at x=1 after flip
+          geom_hline(yintercept= A(fix),   color="blue", linetype="dashed") +  # estimate
+          geom_hline(yintercept=A(L),   color="blue", linetype="dashed") +   
+          geom_hline(yintercept=A(U),  color="blue", linetype="dashed") +   
+          coord_flip() +  # flip coordinates (puts labels on y axis)
+          xlab("Label") + ylab("Mean (95% CI)") +
+          theme_bw() + # use a white background +
+    theme(legend.position="none") 
+
+  print(fp)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+## REFERENCES
+
+1 paper http://bmcmedresmethodol.biomedcentral.com/track/pdf/10.1186/1471-2288-11-94?site=bmcmedresmethodol.biomedcentral.com
+1 code http://www.biomedcentral.com/content/supplementary/1471-2288-11-94-S1.PDF
+1 code https://bmcmedresmethodol.biomedcentral.com/articles/10.1186/1471-2288-11-94#MOESM1
+2 forrest plot https://stackoverflow.com/questions/38062650/forest-plot-for-a-beginner-simple-example-using-ggplot2-edited
+3 https://stackoverflow.com/questions/14639892/how-to-extract-words-between-two-period-using-rs-gsub
+4 https://stackoverflow.com/questions/31774086/extracting-text-after-last-period-in-string-in-r
+5 https://stats.stackexchange.com/questions/147836/prediction-interval-for-lmer-mixed-effects-model-in-r
+6 http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#lme4
+
+\clearpage
+
+# COMPUTING ENVIRONMENT
+
+```{r, echo=FALSE}
+
+options(width=70)
+opts_knit$set(root.dir = wd.code)   ##THIS SETS YOUR WORKING DIRECTORY
+sessionInfo()
+print(getwd())
+stopTime<-proc.time()
+
+```
+
+This took `r (stopTime-startTime)[1][[1]]` seconds to execute.
+
+```{r echo=FALSE}
+
+# move stangle R file to a folder  
+# put this at bottom & give it the same name as RMD file , replace any blanks with underscore
+# https://amywhiteheadresearch.wordpress.com/2014/11/12/copying-files-with-r/
+xxx <- "Simulate a binomial response and random effects.R"
+rcode <-  gsub(' ','_', trimws(xxx))          # replace blank with underscore, this is needed
+file.copy(rcode, getwd(),  overwrite=TRUE)# make a copy of the rcode in a folder of choice
+
+```
+ 
